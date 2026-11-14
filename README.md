@@ -9,7 +9,9 @@ What it does:
 - Connect to a Rex server by address (`host:7297`, `http://…`, `https://rex.<tailnet>.ts.net`).
 - List sessions, create a new shell session, and list a session's terminal blocks.
 - Show a terminal live, with colors and full-screen apps (vim, top, …), and type into it.
-  The keys bar has Esc, Tab, sticky Ctrl, arrows, and `| ~ / -`. Hardware keyboards work too.
+  The keyboard opens when a terminal opens, and tapping the terminal brings it back.
+  The keys bar has a ⌨ toggle, Esc, Tab, sticky Ctrl, arrows, and `| ~ / -`.
+  Hardware keyboards work too.
 - Size the terminal to the phone while you view it. The client takes ownership of the block
   and gives it back when you leave.
 - Reconnect automatically when Android drops the connection, using the server's

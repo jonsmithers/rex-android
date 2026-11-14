@@ -89,6 +89,8 @@ private class TerminalController(
             pageReady = true
             beforeReady.forEach { webView.evaluateJavascript(it, null) }
             beforeReady.clear()
+            // Opening a terminal is usually so you can type into it.
+            webView.showKeyboard()
         }
     }
 
@@ -98,8 +100,8 @@ private class TerminalController(
     }
 
     @JavascriptInterface
-    fun showKeyboard() {
-        main.post { webView.showKeyboard() }
+    fun toggleKeyboard() {
+        main.post { webView.toggleKeyboard() }
     }
 
     @JavascriptInterface

@@ -2,9 +2,16 @@ package dev.rexclient.android
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Build
 import android.text.InputType
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.view.WindowInsets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import kotlin.math.abs
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -29,11 +36,68 @@ class TermWebView(context: Context) : WebView(context) {
         isFocusableInTouchMode = true
     }
 
+    private val imm get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+
+    private val isKeyboardVisible: Boolean
+        get() = ViewCompat.getRootWindowInsets(this)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+
+    /**
+     * Shows the soft keyboard. Right after focus moves to this view the IME may
+     * not be bound to it yet, so showSoftInput can silently do nothing; ask the
+     * window's insets controller too, and retry once after a moment.
+     */
     fun showKeyboard() {
-        requestFocus()
-        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-        imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+        if (!hasFocus()) requestFocus()
+        post {
+            imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                windowInsetsController?.show(WindowInsets.Type.ime())
+            }
+        }
+        postDelayed({
+            if (!isKeyboardVisible) {
+                requestFocus()
+                imm.restartInput(this)
+                imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }, 250)
     }
+
+    fun hideKeyboard() {
+        imm.hideSoftInputFromWindow(windowToken, 0)
+    }
+
+    fun toggleKeyboard() {
+        if (isKeyboardVisible) hideKeyboard() else showKeyboard()
+    }
+
+    // A tap (not a scroll) on the terminal brings up the keyboard. This is done
+    // natively because xterm.js may consume the page's touch events.
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var tapCandidate = false
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; tapCandidate = true
+            }
+            MotionEvent.ACTION_MOVE -> if (tapCandidate &&
+                (abs(event.x - downX) > touchSlop || abs(event.y - downY) > touchSlop)
+            ) tapCandidate = false
+            MotionEvent.ACTION_UP -> if (tapCandidate &&
+                event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout() &&
+                event.y < height - keysBarHeightPx
+            ) showKeyboard()
+            MotionEvent.ACTION_CANCEL -> tapCandidate = false
+        }
+        return super.onTouchEvent(event)
+    }
+
+    /** Height of the page's keys bar, whose buttons handle their own taps. */
+    private val keysBarHeightPx get() = 41f * resources.displayMetrics.density
 
     override fun onCheckIsTextEditor() = true
 
