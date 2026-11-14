@@ -8,3 +8,5 @@ local.properties
 captures/
 app/libghostty-vt/
 app/.cxx/
+/.envrc
+/.claude/worktrees
