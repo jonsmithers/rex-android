@@ -1,0 +1,4 @@
+# Ghostty commit that app/libghostty-vt is built from (read by build-libghostty-vt.sh).
+# The snapshot format the Rex server sends must decode with this version; after
+# bumping, check a real stream against the new build before shipping.
+822e84272f60e320526e6c2c223ccdf786d334c9

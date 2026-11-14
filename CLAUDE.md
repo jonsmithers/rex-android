@@ -2,14 +2,30 @@
 
 Barebones Android client for [Rex](https://www.superlogical.com/rex/docs/installation)
 (a terminal multiplexer with a client/server split). Kotlin + Jetpack Compose, OkHttp
-WebSockets, xterm.js in a WebView for rendering. See README.md for user-facing docs.
+WebSockets, and Ghostty's libghostty-vt (via a small JNI shim) for terminal emulation, drawn
+on a plain Canvas. See README.md for user-facing docs.
 
 ## Build
 
 ```sh
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+./scripts/build-libghostty-vt.sh   # once: → app/libghostty-vt/ (gitignored)
 ./gradlew assembleDebug     # → app/build/outputs/apk/debug/app-debug.apk (debug-signed, sideloadable)
 ```
+
+- **libghostty-vt** is built by `scripts/build-libghostty-vt.sh` from a temporary
+  `git clone --shared` of `~/git/ghostty` at the commit in `scripts/ghostty.version`. Never
+  modify or move `~/git/ghostty` (myterm uses it). It needs zig 0.16
+  (`/opt/homebrew/opt/zig@0.16`; zig 0.17 is the default `zig` and too new) and the NDK.
+  The static `.a` is linked into `librexvt.so` by `app/src/main/cpp/CMakeLists.txt`.
+  Only `arm64-v8a` is built (phones and the Apple-silicon emulator).
+- NDK 29.0.14206865 and CMake 4.1.2 come from the SDK (`sdkmanager`), and are pinned in
+  `app/build.gradle.kts`.
+- When bumping the Ghostty pin, check that a real server snapshot still decodes: capture a
+  stream from the loopback server and decode it with a host build of libghostty-vt
+  (`zig build -Demit-lib-vt` in a temp clone; `ghostty_snapshot_decoder_*`). The format is
+  version 1 and has no compatibility guarantee yet. Logcat tag `rexvt` logs the linked
+  version at startup and any decode failure.
 
 - AGP 9.5 (built-in Kotlin, so don't apply `org.jetbrains.kotlin.android`), Gradle 9.9.1,
   Kotlin compose plugin 2.4.21.
@@ -19,19 +35,21 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
   (`$ANDROID_HOME/cmdline-tools/latest/bin`) work. Homebrew's `avdmanager` can't find
   system images there.
 - No XML comments containing `--` in AndroidManifest.xml (the manifest merger fails).
-- The disk is nearly full (about 10 GB free). Check `df -h` before installing SDK packages.
+- The disk is nearly full (about 6 GB free after the NDK). Check `df -h` before installing
+  SDK packages.
 
 ## Source map
 
 | File | Role |
 | --- | --- |
 | `RexControl.kt` | `rex.control.v1` client: hello/welcome, request/response by id, events, reconnect token, typed helpers, `SessionView` parsing |
-| `TerminalStream.kt` | `rex.data.terminal.v1`: `data.connect` ticket → `/api/data` → HELLO/WELCOME → bytes. Skips the snapshot, seeds via `terminal.format` vt, strips `rex1` APCs |
-| `TerminalScreen.kt` | `TerminalController` glue: stream → page, page input → serialized `terminal.write`, own/resize/disown |
-| `TermWebView.kt` | WebView that owns the keyboard: custom `InputConnection` + `dispatchKeyEvent`, native tap-to-show-keyboard |
+| `TerminalStream.kt` | `rex.data.terminal.v1`: `data.connect` ticket → `/api/data` → HELLO/WELCOME → bytes. Collects the snapshot (record framing up to FINISH) for `onSnapshot`, strips `rex1` APCs; falls back to `terminal.format` vt seeding if the snapshot won't decode |
+| `TerminalScreen.kt` | `TerminalController` glue: stream → `VtTerminal`, input → serialized `terminal.write`, serialized own/resize, disown; Compose keys bar and status overlay |
+| `TerminalView.kt` | Canvas renderer for a `VtTerminal` frame; tap shows the keyboard, drag scrolls; custom `InputConnection` + `dispatchKeyEvent` through Ghostty's key encoder; sticky Ctrl |
+| `GhosttyVt.kt` | JNI declarations and `VtTerminal` (thread-safe wrapper: write, resize, colors, scroll, frame, encodeKey) |
+| `cpp/rexvt.c` | JNI shim: terminal create/decode/free, `vt_write`, resize, theme colors, render state → flat int arrays, synchronized-output holds, key encoding |
 | `RexViewModel.kt` | Navigation state (`Screen`), connection lifecycle, auto-reconnect |
 | `MainActivity.kt` | Compose UI: Connect → Sessions → Session (blocks) → Terminal |
-| `assets/terminal/index.html` | xterm.js 6.0 + fit addon page, keys bar, `window.rex` API called from Kotlin |
 
 ## Rex protocol essentials
 
@@ -53,10 +71,11 @@ The authoritative reference is served by every Rex server at `GET /llms.txt`. It
   one-use, valid for 60s. Binary HELLO is `0x01` + 16 ticket bytes. WELCOME is 32 bytes:
   `0x81`, 16-byte token, 3 zero bytes, u32 keep-ms, u64 nonce (all little-endian; the nonce
   is unsigned). REJECT is `0x82` + a reason byte.
-- **Stream contents:** a binary Ghostty snapshot (`GHOSTSNP` + u16 version 1) comes first,
-  then raw VT output with interleaved `ESC _ rex1;<nonce decimal>;<json> ESC \` messages:
-  `resize` (`cols`/`rows`), `theme`, `child_exited`. The first `resize` follows the snapshot
-  immediately.
+- **Stream contents:** a binary Ghostty snapshot comes first: `GHOSTSNP` + u16 version 1,
+  then records of u16 tag, u32 length, u32 CRC32C, and payload, ending with tag 6 (FINISH).
+  Raw VT output follows, with interleaved `ESC _ rex1;<nonce decimal>;<json> ESC \`
+  messages: `resize` (`cols`/`rows`/`cell_width_px`/`cell_height_px`), `theme`, and
+  `child_exited`. The first `resize` follows the snapshot immediately.
 - **Ownership:** the client calls `session.own_block` (take) so `terminal.resize` applies,
   and `session.disown_block` when leaving, so Rex.app can size the block again.
 - **Network access:** remote servers need TCP (Tailscale `https://rex.<tailnet>.ts.net`, or
@@ -64,19 +83,24 @@ The authoritative reference is served by every Rex server at `GET /llms.txt`. It
 
 ## Android gotchas (learned the hard way)
 
-- **xterm.js's own keyboard input is broken on Android.** Its textarea diffing drops and
-  repeats characters. Input is handled natively in `TermWebView` (visible-password
-  `InputConnection` and `dispatchKeyEvent`). xterm.js runs with `disableStdin: true`.
 - **Never let the client-side emulator answer terminal queries** (DA, DSR, …). The server's
   terminal already answers them, and replies from the client would duplicate them as input.
-- **`showSoftInput` is unreliable** right after focus changes. `TermWebView.showKeyboard()`
+  `rexvt.c` leaves `GHOSTTY_TERMINAL_OPT_WRITE_PTY` unset for this reason.
+- **Input must commit per character.** IMEs compose words unless the `InputConnection` says
+  visible-password with no suggestions (`TerminalView.onCreateInputConnection`).
+- **`showSoftInput` is unreliable** right after focus changes. `TerminalView.showKeyboard()`
   also uses the insets controller and retries.
+- **Compose doesn't clip `AndroidView`s.** `canvas.drawColor` in `TerminalView.onDraw` painted
+  the whole window until the view clipped to its own bounds.
+- **Block calls race.** Concurrent `terminal.resize` calls can land out of order (a stale size
+  wins), so size requests go through one conflated channel. A closing view's `disown_block`
+  is awaited before the next view of that block claims it.
 - **Android kills a backgrounded app's sockets within about 4s.** `RexViewModel` reconnects
   with the welcome's `reconnect_token` (the server keeps the client for 60s) on drop and in
   `onStart`, then re-attaches. `TerminalScreen` is keyed on the control instance, so a new
   connection rebuilds the view and stream.
-- The activity handles config changes itself (`android:configChanges`), so the WebView survives
-  rotation.
+- The activity handles config changes itself (`android:configChanges`), so the terminal view
+  survives rotation.
 
 ## Testing in the emulator
 
@@ -95,7 +119,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   `adb exec-out screencap -p` (what the app shows).
 - Check the IME with `adb shell dumpsys input_method | grep mInputShown`.
 - In the Pixel 7 AVD the terminal list's first row is at about (300, 370) and the keys bar is
-  at y ≈ 1465 while the keyboard is up.
+  at y ≈ 1465 while the keyboard is up (⌨ x≈58, Esc 174, Tab 290, Ctrl 416, ← 544, ↑ 660,
+  ↓ 776, → 892).
+- `rex send -s demo $'…\r'` types on the server side, for commands `adb shell input text`
+  can't express.
 - `adb shell input text` breaks on `;` and quotes. Use `%s` for spaces.
 - `--allow-anonymous` grants full access. Only use it on loopback, and stop the server afterwards.
 - AVD `rex_test` (API 36, arm64) has a 2 GB data partition because of the disk constraints.

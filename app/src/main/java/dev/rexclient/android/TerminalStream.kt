@@ -19,12 +19,15 @@ import java.nio.ByteOrder
 /**
  * Streams one terminal block over a `rex.data.terminal.v1` data connection.
  *
- * The stream begins with a binary Ghostty snapshot, which this client can't
- * render. So we discard everything up to the first Rex `resize` message (sent
- * right after the snapshot), then seed the screen from
- * `com.superlogical.terminal.format` in `vt` form, and from then on pass the
- * program's output through, stripping Rex's own `ESC _ rex1;<nonce>;<json> ESC \`
- * messages and acting on them.
+ * The stream begins with a binary Ghostty snapshot of the whole terminal
+ * (scrollback included), which goes to [Listener.onSnapshot] once it has
+ * fully arrived. After it comes the program's output, passed through with
+ * Rex's own `ESC _ rex1;<nonce>;<json> ESC \` messages stripped and acted on.
+ *
+ * If the snapshot can't be used (say, the server's Ghostty writes a format our
+ * libghostty-vt doesn't read), we fall back to the old way: drop everything up
+ * to the first Rex `resize` message (sent right after the snapshot), then seed
+ * the screen from `com.superlogical.terminal.format` in `vt` form.
  *
  * All [Listener] callbacks are made from a background thread, in stream order.
  */
@@ -36,10 +39,15 @@ class TerminalStream(
     private val listener: Listener,
 ) {
     interface Listener {
-        /** Clear the screen and write [vt], which redraws the current screen. */
+        /**
+         * A complete Ghostty snapshot (envelope through FINISH) that replaces the
+         * screen. Return false if it couldn't be decoded, to fall back to [onReset].
+         */
+        fun onSnapshot(snapshot: ByteArray): Boolean
+        /** Start a fresh screen and write [vt], which redraws the current screen. */
         fun onReset(vt: String)
         fun onOutput(bytes: ByteArray)
-        fun onResize(cols: Int, rows: Int)
+        fun onResize(cols: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int)
         fun onTheme(theme: JSONObject)
         fun onChildExited(exitCode: Int)
         fun onStatus(status: String?)
@@ -47,7 +55,11 @@ class TerminalStream(
         fun onEnded(reason: String)
     }
 
-    private enum class Phase { HANDSHAKE, SNAPSHOT, SEEDING, LIVE }
+    /**
+     * HANDSHAKE → SNAPSHOT → LIVE normally. If the snapshot is unusable:
+     * SNAPSHOT → SKIPPING (until the first resize) → SEEDING → LIVE.
+     */
+    private enum class Phase { HANDSHAKE, SNAPSHOT, SKIPPING, SEEDING, LIVE }
 
     private val lock = Any()
     private var ws: WebSocket? = null
@@ -57,6 +69,11 @@ class TerminalStream(
     private var stopped = false
     private var retries = 0
     private var seedJob: Job? = null
+
+    // Snapshot bytes received so far, and where the next record header starts.
+    private var snap = ByteArray(0)
+    private var snapLen = 0
+    private var snapScan = 0
 
     // APC filter state (see [filter]).
     private var escState = 0 // 0 normal, 1 saw ESC, 2 in APC, 3 saw ESC in APC
@@ -102,6 +119,7 @@ class TerminalStream(
             if (stopped) return
             val gen = ++generation
             phase = Phase.HANDSHAKE
+            snap = ByteArray(0); snapLen = 0; snapScan = SNAPSHOT_ENVELOPE
             escState = 0
             apc.reset()
             ws = RexControl.http.newWebSocket(request, DataListener(gen, ticket))
@@ -118,10 +136,10 @@ class TerminalStream(
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             synchronized(lock) {
                 if (gen != generation || stopped) return
-                if (phase == Phase.HANDSHAKE) {
-                    handshake(webSocket, bytes.toByteArray())
-                } else {
-                    filter(bytes.toByteArray())
+                when (phase) {
+                    Phase.HANDSHAKE -> handshake(webSocket, bytes.toByteArray())
+                    Phase.SNAPSHOT -> snapshot(bytes.toByteArray())
+                    else -> filter(bytes.toByteArray())
                 }
             }
         }
@@ -163,6 +181,49 @@ class TerminalStream(
                 end("[bad handshake from server]")
             }
         }
+    }
+
+    /**
+     * Collects the snapshot. Its end is found by walking the record framing
+     * (each record is u16 tag, u32 payload length, u32 CRC, payload) up to the
+     * FINISH record; whatever follows in the same message is live output.
+     * Called with [lock] held.
+     */
+    private fun snapshot(data: ByteArray) {
+        if (snapLen + data.size > snap.size) {
+            snap = snap.copyOf(maxOf(snap.size * 2, snapLen + data.size, 64 * 1024))
+        }
+        data.copyInto(snap, snapLen)
+        snapLen += data.size
+        if (snapLen < SNAPSHOT_ENVELOPE) return
+        if (!snap.copyOf(SNAPSHOT_MAGIC.size).contentEquals(SNAPSHOT_MAGIC) || snapLen > MAX_SNAPSHOT) {
+            return useFallback(0)
+        }
+        val buf = ByteBuffer.wrap(snap, 0, snapLen).order(ByteOrder.LITTLE_ENDIAN)
+        while (snapScan + RECORD_HEADER <= snapLen) {
+            val tag = buf.getShort(snapScan).toInt() and 0xffff
+            val end = snapScan.toLong() + RECORD_HEADER + (buf.getInt(snapScan + 2).toLong() and 0xffffffffL)
+            if (end > snapLen) return // Wait for the rest of this record.
+            snapScan = end.toInt()
+            if (tag == TAG_FINISH) {
+                val ok = listener.onSnapshot(snap.copyOf(snapScan))
+                if (!ok) return useFallback(snapScan)
+                val rest = snap.copyOfRange(snapScan, snapLen)
+                snap = ByteArray(0); snapLen = 0
+                phase = Phase.LIVE
+                listener.onStatus(null)
+                filter(rest)
+                return
+            }
+        }
+    }
+
+    /** Give up on the snapshot; bytes from [from] on go through [filter]. */
+    private fun useFallback(from: Int) {
+        val rest = snap.copyOfRange(from, snapLen)
+        snap = ByteArray(0); snapLen = 0
+        phase = Phase.SKIPPING
+        filter(rest)
     }
 
     /**
@@ -217,8 +278,8 @@ class TerminalStream(
         val msg = try { JSONObject(json) } catch (_: Exception) { return }
         when (msg.optString("type")) {
             "resize" -> {
-                listener.onResize(msg.optInt("cols"), msg.optInt("rows"))
-                if (phase == Phase.SNAPSHOT) beginSeed()
+                listener.onResize(msg.optInt("cols"), msg.optInt("rows"), msg.optInt("cell_width_px"), msg.optInt("cell_height_px"))
+                if (phase == Phase.SKIPPING) beginSeed()
             }
             "theme" -> listener.onTheme(msg)
             "child_exited" -> listener.onChildExited(msg.optInt("exit_code"))
@@ -284,7 +345,7 @@ class TerminalStream(
         listener.onEnded(reason)
     }
 
-    /** Start over with a fresh ticket; the new stream re-seeds the screen. */
+    /** Start over with a fresh ticket; the new stream's snapshot replaces the screen. */
     private fun reconnect(why: String) {
         synchronized(lock) {
             if (stopped) return
@@ -312,6 +373,12 @@ class TerminalStream(
         const val SUBPROTOCOL = "rex.data.terminal.v1"
         private const val ESC = 0x1b
         private const val MAX_APC = 256 * 1024
+
+        private val SNAPSHOT_MAGIC = "GHOSTSNP".toByteArray()
+        private const val SNAPSHOT_ENVELOPE = 10 // magic + u16 version
+        private const val RECORD_HEADER = 10
+        private const val TAG_FINISH = 6
+        private const val MAX_SNAPSHOT = 256 * 1024 * 1024
         private val REJECT_REASONS = mapOf(
             1 to "unknown or expired ticket",
             2 to "this client already streams this block",

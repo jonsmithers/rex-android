@@ -9,6 +9,8 @@ What it does:
 - Connect to a Rex server by address (`host:7297`, `http://…`, `https://rex.<tailnet>.ts.net`).
 - List sessions, create a new shell session, and list a session's terminal blocks.
 - Show a terminal live, with colors and full-screen apps (vim, top, …), and type into it.
+  Rendering and key encoding use Ghostty's terminal library (libghostty-vt), so the screen
+  matches the server's exactly, scrollback included. Drag to scroll through history.
   The keyboard opens when a terminal opens, and tapping the terminal brings it back.
   The keys bar has a ⌨ toggle, Esc, Tab, sticky Ctrl, arrows, and `| ~ / -`.
   Hardware keyboards work too.
@@ -33,11 +35,15 @@ and use it only for testing.
 
 ## Building
 
-Requires JDK 17+ (21 tested) and the Android SDK with platform 37.
+Requires JDK 17+ (21 tested), the Android SDK with platform 37, NDK 29.0.14206865, and
+CMake 4.1.2 from the SDK. Building libghostty-vt also needs zig 0.16 and a Ghostty checkout
+(the script clones from `~/git/ghostty`, or from GitHub if there's none).
 
 ```sh
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 echo "sdk.dir=$HOME/Library/Android/sdk" > local.properties
+sdkmanager "ndk;29.0.14206865" "cmake;4.1.2"
+./scripts/build-libghostty-vt.sh   # once; rebuild after changing scripts/ghostty.version
 ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -47,32 +53,37 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 RexControl.kt     rex.control.v1: WebSocket /api/control, hello/welcome, JSON request/response, events
 TerminalStream.kt rex.data.terminal.v1: data.connect ticket → WebSocket /api/data → HELLO/WELCOME → byte stream
-TerminalScreen.kt glue: stream → xterm.js, keyboard → com.superlogical.terminal.write (serialized)
-TermWebView.kt    WebView that owns the IME/hardware keyboard itself
+TerminalScreen.kt glue: stream → Ghostty terminal, keyboard → com.superlogical.terminal.write (serialized); keys bar
+TerminalView.kt   draws the terminal on a Canvas; owns touch, the IME, and hardware keys
+GhosttyVt.kt      Kotlin side of the JNI shim; VtTerminal wraps one Ghostty terminal
+cpp/rexvt.c       JNI shim over libghostty-vt (snapshot decode, VT parsing, render state, key encoding)
 RexViewModel.kt   connection lifecycle, navigation, auto-reconnect
-assets/terminal/  xterm.js 6.0 + fit addon (rendering only; stdin disabled)
 ```
 
 Details that weren't obvious from the docs:
 
 - **The Ghostty snapshot.** A terminal stream starts with a binary Ghostty snapshot
-  (`GHOSTSNP…`), which xterm.js can't read. The client drops bytes up to the first
-  `ESC _ rex1;<nonce>;{"type":"resize",…} ESC \`, which the server sends right after the
-  snapshot. It then seeds the screen from `com.superlogical.terminal.format` with
-  `format: "vt"` (cursor, modes, style, and scrolling region included) and goes live.
-  A few bytes printed in the instant between those two steps can be lost.
-- **Keyboard.** xterm.js's hidden-textarea input drops and repeats characters with Android
-  keyboards. Input is taken natively instead: a visible-password `InputConnection` plus
-  `dispatchKeyEvent`. With stdin disabled, xterm.js also doesn't answer terminal queries
-  (DA/DSR). The server's terminal already answers them, so doing it here would send
-  duplicate replies.
+  (`GHOSTSNP…`) of the whole terminal, scrollback included. The client finds its end by
+  walking the record framing to the FINISH record, restores it with libghostty-vt's
+  snapshot decoder, and feeds everything after it to that terminal. The Ghostty version is
+  pinned in `scripts/ghostty.version`. If a snapshot ever fails to decode (say, the server's
+  Ghostty writes a newer format), the client falls back to seeding the screen from
+  `com.superlogical.terminal.format` with `format: "vt"`.
+- **Keyboard.** Input is taken natively: a visible-password `InputConnection` (so keyboards
+  commit each character) plus `dispatchKeyEvent`. Keys go through Ghostty's key encoder,
+  which follows the terminal's modes (application cursor keys, kitty keyboard flags, …).
+- **No query replies.** The client's terminal never answers queries (DA/DSR). The server's
+  terminal already answers them, so doing it here would send duplicate replies.
+- **Size.** The grid follows the server's `resize` messages. The client asks for the size
+  that fits the phone (with its cell size in pixels), but if another client owns the block,
+  a grid too big for the screen is scaled down to fit.
 - **Ordering.** Block methods such as `terminal.write` aren't run in order on the server.
   Writes are sent one at a time, and keystrokes typed meanwhile are batched together.
 
 ## Limitations
 
 - One block at a time. No split layouts, window switching, or floating layers.
-- No mouse reporting, text selection or copy, or scrollback gestures beyond what xterm.js does.
+- No mouse reporting, text selection, or copy. In full-screen apps, dragging sends arrow keys.
 - Composing keyboards (CJK, swipe) only send text once it's committed.
 - Uses the system monospace font, so Nerd Font and powerline glyphs show as boxes.
 - Cleartext HTTP is allowed so the client can reach tailnet or LAN listeners.

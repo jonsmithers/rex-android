@@ -13,6 +13,20 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        ndk {
+            // Real phones and Apple-silicon emulators. Add "x86_64" here (and build
+            // libghostty-vt with ABIS="arm64-v8a x86_64") for an Intel emulator.
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    // librexvt.so: a JNI shim over libghostty-vt (see scripts/build-libghostty-vt.sh).
+    ndkVersion = "29.0.14206865"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.1.2"
+        }
     }
 
     buildTypes {
