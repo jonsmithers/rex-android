@@ -44,13 +44,14 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 | --- | --- |
 | `RexControl.kt` | `rex.control.v1` client: hello/welcome, request/response by id, events, reconnect token, typed helpers, `SessionView` parsing |
 | `TerminalStream.kt` | `rex.data.terminal.v1`: `data.connect` ticket → `/api/data` → HELLO/WELCOME → bytes. Collects the snapshot (record framing up to FINISH) for `onSnapshot`, strips `rex1` APCs; falls back to `terminal.format` vt seeding if the snapshot won't decode |
-| `TerminalScreen.kt` | `TerminalController` glue: stream → `VtTerminal`, input → serialized `terminal.write`, serialized own/resize, disown; Compose keys bar and status overlay |
+| `TerminalScreen.kt` | `TerminalController` glue: stream → `VtTerminal`, input → serialized `terminal.write`, serialized own/resize, disown; Compose keycap bar and status pill |
 | `TerminalView.kt` | Canvas renderer for a `VtTerminal` frame in the bundled JetBrains Mono Nerd Font Mono (`res/font`, Nerd Fonts v3.5.1; licenses in `assets/licenses`); tap shows the keyboard, drag scrolls; custom `InputConnection` + `dispatchKeyEvent` through Ghostty's key encoder; sticky Ctrl |
 | `GhosttyVt.kt` | JNI declarations and `VtTerminal` (thread-safe wrapper: write, resize, colors, scroll, frame, encodeKey) |
 | `cpp/rexvt.c` | JNI shim: terminal create/decode/free, `vt_write`, resize, theme colors, render state → flat int arrays, synchronized-output holds, key encoding |
 | `RexViewModel.kt` | Navigation state (`Screen`), connection lifecycle, auto-reconnect, `blockDetails` (kept live from `block_event`s), `newTab` |
 | `BlockDetails.kt` | Per-terminal title, foreground process, and cwd, and the display names built from them (`displayTitle`, `tabName`) |
-| `MainActivity.kt` | Compose UI: Connect → Sessions → Session (blocks grouped by tab) → Terminal |
+| `MainActivity.kt` | Compose UI: Connect → Sessions → Session (blocks grouped by tab) → Terminal, with animated screen transitions |
+| `Theme.kt` | `RexTheme` (light and dark color schemes, brand gradient), `NfIcon`/`Glyph` icons drawn from the bundled Nerd Font (no icon library), per-program icons |
 
 ## Rex protocol essentials
 
@@ -125,9 +126,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
   `rex -S http://127.0.0.1:7297 capture -s demo` (what the server saw) and
   `adb exec-out screencap -p` (what the app shows).
 - Check the IME with `adb shell dumpsys input_method | grep mInputShown`.
-- In the Pixel 7 AVD the terminal list's first row is at about (300, 370) and the keys bar is
-  at y ≈ 1465 while the keyboard is up (⌨ x≈58, Esc 174, Tab 290, Ctrl 416, ← 544, ↑ 660,
-  ↓ 776, → 892).
+- In the Pixel 7 AVD the first session card is at about (540, 440), the first terminal row
+  of a session at about (540, 530), and the keys bar is at y ≈ 1450 while the keyboard is up
+  (⌨ x≈76, Esc 213, Tab 351, Ctrl 500, ← 650, ↑ 787, ↓ 924; → is partly off screen).
+- `adb shell cmd uimode night yes|no` flips the theme (the app follows the system), and
+  `adb shell cmd connectivity airplane-mode enable|disable` exercises the reconnect banner.
 - `rex send -s demo $'…\r'` types on the server side, for commands `adb shell input text`
   can't express.
 - `adb shell input text` breaks on `;` and quotes. Use `%s` for spaces.

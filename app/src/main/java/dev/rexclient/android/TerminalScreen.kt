@@ -5,6 +5,34 @@ import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
 import android.view.ViewGroup
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -28,7 +56,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -249,18 +276,32 @@ fun TerminalScreen(control: RexControl, sessionId: String, blockId: String, modi
         onDispose { controller.dispose() }
     }
 
+    // Keep the last status so the pill stays readable while it fades out.
+    var lastStatus by remember(view) { mutableStateOf("") }
+    status.value?.let { lastStatus = it }
     Column(modifier.background(Color(0xff1d1f21))) {
         Box(Modifier.fillMaxWidth().weight(1f)) {
             AndroidView(factory = { view }, modifier = Modifier.fillMaxSize())
-            status.value?.let {
-                Text(
-                    it,
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-                        .background(Color(0x99000000), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
+            androidx.compose.animation.AnimatedVisibility(
+                visible = status.value != null,
+                enter = fadeIn() + slideInVertically { -it },
+                exit = fadeOut() + slideOutVertically { -it },
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
+            ) {
+                val t = rememberInfiniteTransition(label = "status")
+                val pulse by t.animateFloat(0.35f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "pulse")
+                Row(
+                    Modifier
+                        .clip(CircleShape)
+                        .background(Color(0xe6161b22))
+                        .border(1.dp, Color(0x33ffffff), CircleShape)
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(7.dp).alpha(pulse).clip(CircleShape).background(RexColors.Green))
+                    Spacer(Modifier.size(8.dp))
+                    Text(lastStatus, color = RexColors.KeycapText, fontSize = 12.sp, fontFamily = RexMono)
+                }
             }
         }
         KeysBar(
@@ -273,7 +314,7 @@ fun TerminalScreen(control: RexControl, sessionId: String, blockId: String, modi
     }
 }
 
-/** Keys that soft keyboards lack. Ctrl is sticky: it applies to the next key. */
+/** Keys that soft keyboards lack, as keycaps. Ctrl is sticky: it applies to the next key. */
 @Composable
 private fun KeysBar(
     ctrl: Boolean,
@@ -283,29 +324,73 @@ private fun KeysBar(
     onText: (String) -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().height(40.dp).background(Color(0xff2a2c2e)).horizontalScroll(rememberScrollState()),
+        Modifier
+            .fillMaxWidth()
+            .background(RexColors.TermChrome)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        @Composable
-        fun key(label: String, on: Boolean = false, action: () -> Unit) {
-            Box(
-                Modifier.widthIn(min = 44.dp).height(40.dp)
-                    .background(if (on) Color(0xff4a6fa5) else Color.Transparent)
-                    .clickable(onClick = action)
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(label, color = if (on) Color.White else Color(0xffdddddd), fontSize = 15.sp, fontFamily = FontFamily.Monospace)
-            }
-        }
-        key("⌨", action = onKeyboard)
-        key("Esc") { onKey(KeyEvent.KEYCODE_ESCAPE) }
-        key("Tab") { onKey(KeyEvent.KEYCODE_TAB) }
-        key("Ctrl", on = ctrl, action = onCtrl)
-        key("←") { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
-        key("↑") { onKey(KeyEvent.KEYCODE_DPAD_UP) }
-        key("↓") { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
-        key("→") { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
-        for (s in listOf("|", "~", "/", "-")) key(s) { onText(s) }
+        Keycap(glyph = Glyph.Keyboard, accent = true, action = onKeyboard)
+        Keycap("Esc") { onKey(KeyEvent.KEYCODE_ESCAPE) }
+        Keycap("Tab") { onKey(KeyEvent.KEYCODE_TAB) }
+        Keycap("Ctrl", on = ctrl, action = onCtrl)
+        Keycap(glyph = Glyph.ArrowLeft) { onKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+        Keycap(glyph = Glyph.ArrowUp) { onKey(KeyEvent.KEYCODE_DPAD_UP) }
+        Keycap(glyph = Glyph.ArrowDown) { onKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+        Keycap(glyph = Glyph.ArrowRight) { onKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        for (s in listOf("|", "~", "/", "-")) Keycap(s) { onText(s) }
+    }
+}
+
+@Composable
+private fun Keycap(
+    label: String? = null,
+    glyph: String? = null,
+    on: Boolean = false,
+    accent: Boolean = false,
+    action: () -> Unit,
+) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        if (pressed) 0.88f else 1f,
+        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
+        label = "key",
+    )
+    val bg by animateColorAsState(
+        when {
+            on -> RexColors.Green
+            pressed -> Color(0xff323a46)
+            else -> RexColors.Keycap
+        },
+        tween(150),
+        label = "keybg",
+    )
+    val fg by animateColorAsState(
+        when {
+            on -> Color(0xff06210f)
+            accent -> RexColors.Green
+            else -> RexColors.KeycapText
+        },
+        tween(150),
+        label = "keyfg",
+    )
+    Box(
+        Modifier
+            .widthIn(min = 46.dp)
+            .height(38.dp)
+            .scale(scale)
+            .clip(RoundedCornerShape(10.dp))
+            .background(bg)
+            // A lighter top edge, like a keycap catching the light.
+            .border(1.dp, Brush.verticalGradient(listOf(Color(0x26ffffff), Color.Transparent)), RoundedCornerShape(10.dp))
+            .clickable(interactionSource = source, indication = null, onClick = action)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (glyph != null) NfIcon(glyph, fg, size = 18.dp)
+        else Text(label.orEmpty(), color = fg, fontSize = 14.sp, fontFamily = RexMono, fontWeight = FontWeight.Medium)
     }
 }

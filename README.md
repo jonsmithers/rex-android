@@ -62,6 +62,7 @@ TerminalView.kt   draws the terminal on a Canvas; owns touch, the IME, and hardw
 GhosttyVt.kt      Kotlin side of the JNI shim; VtTerminal wraps one Ghostty terminal
 cpp/rexvt.c       JNI shim over libghostty-vt (snapshot decode, VT parsing, render state, key encoding)
 RexViewModel.kt   connection lifecycle, navigation, auto-reconnect
+Theme.kt          colors, the brand gradient, and icons drawn from the bundled Nerd Font
 ```
 
 Details that weren't obvious from the docs:
