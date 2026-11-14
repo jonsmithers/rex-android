@@ -7,7 +7,11 @@ as a live, interactive terminal.
 What it does:
 
 - Connect to a Rex server by address (`host:7297`, `http://…`, `https://rex.<tailnet>.ts.net`).
-- List sessions, create a new shell session, and list a session's terminal blocks.
+- List sessions, create a new shell session, and list a session's terminal blocks, grouped
+  by tab. Each block is named by its terminal title (or its own label, if it has one), with
+  the running program and directory under it, and both update live.
+- Open a new tab with a shell (**New tab** in the block list, **+ Tab** in a terminal). It
+  doesn't become the session's active tab, so Rex.app keeps showing what it was showing.
 - Show a terminal live, with colors and full-screen apps (vim, top, …), and type into it.
   Rendering and key encoding use Ghostty's terminal library (libghostty-vt), so the screen
   matches the server's exactly, scrollback included. Drag to scroll through history.
@@ -82,7 +86,7 @@ Details that weren't obvious from the docs:
 
 ## Limitations
 
-- One block at a time. No split layouts, window switching, or floating layers.
+- One block at a time. No split layouts, splitting, window switching, or floating layers.
 - No mouse reporting, text selection, or copy. In full-screen apps, dragging sends arrow keys.
 - Composing keyboards (CJK, swipe) only send text once it's committed.
 - Cleartext HTTP is allowed so the client can reach tailnet or LAN listeners.

@@ -1,6 +1,8 @@
 package dev.rexclient.android
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -32,6 +34,7 @@ class RexControl private constructor(val baseUrl: HttpUrl, private val resumeTok
     companion object {
         const val API_REVISION = 11
         const val DEFAULT_PORT = 7297
+        const val SHELL_FLAVOR = "com.superlogical.terminal.shell"
 
         val http: OkHttpClient = OkHttpClient.Builder()
             // The server pings every 120s; ping it too so we notice a dead server.
@@ -224,7 +227,7 @@ class RexControl private constructor(val baseUrl: HttpUrl, private val resumeTok
             JSONArray().put(
                 JSONObject().put(
                     "layout",
-                    JSONObject().put("block", JSONObject().put("flavor", "com.superlogical.terminal.shell")),
+                    JSONObject().put("block", JSONObject().put("flavor", SHELL_FLAVOR)),
                 )
             ),
         )
@@ -239,6 +242,30 @@ class RexControl private constructor(val baseUrl: HttpUrl, private val resumeTok
 
     suspend fun detach(sessionId: String) {
         call("session.detach", JSONObject().put("session_id", sessionId))
+    }
+
+    /**
+     * Opens a new tab (window) holding one shell, without making it the
+     * session's active tab, so other clients keep showing what they were.
+     * Returns the new block's ID.
+     */
+    suspend fun newWindow(sessionId: String): String {
+        val payload = JSONObject()
+            .put("session_id", sessionId)
+            .put("layout", JSONObject().put("block", JSONObject().put("flavor", SHELL_FLAVOR)))
+            .put("focus", false)
+        return call("session.new_window", payload).getJSONArray("block_ids").getString(0)
+    }
+
+    /** Reads a terminal's title, foreground process, and reported directory. */
+    suspend fun terminalDetails(sessionId: String, blockId: String): BlockDetails = coroutineScope {
+        val title = async { callBlock(sessionId, blockId, "com.superlogical.terminal.title") }
+        val process = async { callBlock(sessionId, blockId, "com.superlogical.terminal.process") }
+        val pwd = async { callBlock(sessionId, blockId, "com.superlogical.terminal.pwd") }
+        val p = process.await()
+        BlockDetails(title = title.await().optString("title"), home = p.optString("home").ifEmpty { null })
+            .withProcess(p.optJSONObject("foreground"))
+            .withPwd(pwd.await())
     }
 
     suspend fun ownBlock(sessionId: String, blockId: String, take: Boolean = true) {
@@ -270,7 +297,10 @@ data class BlockInfo(
     val id: String,
     val label: String,
     val creator: String,
+    val flavor: String,
     val windowId: String,
+    /** The window's position among the session's tabs, from 0. */
+    val windowIndex: Int,
     val windowLabel: String,
     val focused: Boolean,
 ) {
@@ -302,7 +332,9 @@ data class SessionView(
                             id = id,
                             label = b.optString("label").ifEmpty { id.takeLast(8) },
                             creator = b.optString("creator_name"),
+                            flavor = b.optString("flavor"),
                             windowId = windowId,
+                            windowIndex = i,
                             windowLabel = w.optString("label"),
                             focused = id == focused,
                         )

@@ -3,6 +3,7 @@ package dev.rexclient.android
 import android.app.Application
 import android.content.Context
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -33,6 +34,10 @@ class RexViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var sessionView by mutableStateOf<SessionView?>(null)
         private set
+
+    /** Title, process, and directory of each terminal block in [sessionView], by block ID. */
+    val blockDetails = mutableStateMapOf<String, BlockDetails>()
+    private val fetchingDetails = mutableSetOf<String>()
 
     /** The live control connection, or null while disconnected or reconnecting. */
     var control by mutableStateOf<RexControl?>(null)
@@ -111,8 +116,8 @@ class RexViewModel(app: Application) : AndroidViewModel(app) {
                     val c = RexControl.connect(address, lastToken)
                     install(c, address)
                     when (val s = screen) {
-                        is Screen.Session -> sessionView = c.attach(s.sessionId)
-                        is Screen.Terminal -> sessionView = c.attach(s.sessionId)
+                        is Screen.Session -> showView(c, c.attach(s.sessionId), fresh = true)
+                        is Screen.Terminal -> showView(c, c.attach(s.sessionId), fresh = true)
                         Screen.Sessions -> sessions = c.listSessions()
                         Screen.Connect -> Unit
                     }
@@ -150,13 +155,61 @@ class RexViewModel(app: Application) : AndroidViewModel(app) {
         val c = requireControl()
         val id = c.createShellSession()
         sessions = c.listSessions()
-        sessionView = c.attach(id)
+        showView(c, c.attach(id), fresh = true)
         screen = Screen.Session(id)
     }
 
     fun openSession(sessionId: String) = run("Couldn't attach") {
-        sessionView = requireControl().attach(sessionId)
+        val c = requireControl()
+        showView(c, c.attach(sessionId), fresh = true)
         screen = Screen.Session(sessionId)
+    }
+
+    /**
+     * Opens a new tab with a shell in the current session and goes straight to
+     * it. The app doesn't show layouts, so it never splits; the new tab also
+     * doesn't become the active one, so Rex.app keeps showing its tab.
+     */
+    fun newTab() = run("Couldn't open a tab") {
+        val sessionId = currentSessionId() ?: return@run
+        val c = requireControl()
+        val blockId = c.newWindow(sessionId)
+        val v = c.view(sessionId)
+        showView(c, v)
+        val block = v.blocks.find { it.id == blockId } ?: return@run
+        if (currentSessionId() == sessionId) screen = Screen.Terminal(sessionId, block)
+    }
+
+    /** The newest info for a block, falling back to what navigation captured. */
+    fun liveBlock(block: BlockInfo): BlockInfo = sessionView?.blocks?.find { it.id == block.id } ?: block
+
+    private fun currentSessionId(): String? =
+        (screen as? Screen.Session)?.sessionId ?: (screen as? Screen.Terminal)?.sessionId
+
+    /**
+     * Shows a session view unless it's older than the one we hold, and reads
+     * the details of terminal blocks we haven't seen. [fresh] drops what we
+     * knew, for a new attach, where events may have been missed.
+     */
+    private fun showView(c: RexControl, v: SessionView, fresh: Boolean = false) {
+        val old = sessionView
+        if (fresh || old == null || old.id != v.id) {
+            blockDetails.clear()
+            fetchingDetails.clear()
+        } else if (v.revision < old.revision) {
+            return
+        }
+        sessionView = v
+        val ids = v.blocks.mapTo(HashSet()) { it.id }
+        blockDetails.keys.retainAll(ids)
+        for (b in v.blocks) {
+            if (!b.isTerminal || b.id in blockDetails || !fetchingDetails.add(b.id)) continue
+            viewModelScope.launch {
+                runCatching { c.terminalDetails(v.id, b.id) }
+                    .onSuccess { d -> if (sessionView?.id == v.id && fetchingDetails.remove(b.id)) blockDetails[b.id] = d }
+                    .onFailure { fetchingDetails.remove(b.id) }
+            }
+        }
     }
 
     fun openBlock(block: BlockInfo) {
@@ -171,6 +224,8 @@ class RexViewModel(app: Application) : AndroidViewModel(app) {
                 val c = control
                 screen = Screen.Sessions
                 sessionView = null
+                blockDetails.clear()
+                fetchingDetails.clear()
                 if (c != null) {
                     viewModelScope.launch { runCatching { c.detach(s.sessionId) } }
                     refreshSessions()
@@ -191,13 +246,31 @@ class RexViewModel(app: Application) : AndroidViewModel(app) {
                 val inner = p.optJSONObject("event")?.optString("type") ?: return
                 val current = (screen as? Screen.Session)?.sessionId
                     ?: (screen as? Screen.Terminal)?.sessionId
-                if (sid != current || inner !in VIEW_EVENTS) return
+                if (sid != current) return
+                if (inner == "block_event") {
+                    p.optJSONObject("event")?.optJSONObject("payload")?.let(::onBlockEvent)
+                    return
+                }
+                if (inner !in VIEW_EVENTS) return
                 viewModelScope.launch {
                     runCatching { c.view(sid) }.onSuccess { v ->
-                        if (v.revision >= (sessionView?.revision ?: -1)) sessionView = v
+                        if (sessionView?.id == sid) showView(c, v)
                     }
                 }
             }
+        }
+    }
+
+    /** Keeps [blockDetails] current from a terminal's own events. */
+    private fun onBlockEvent(e: JSONObject) {
+        val id = e.optString("block_id")
+        val d = blockDetails[id] ?: return // Not read yet; the read will include this change.
+        val p = e.optJSONObject("payload") ?: JSONObject()
+        blockDetails[id] = when (e.optString("name")) {
+            "title_changed" -> d.copy(title = p.optString("title"))
+            "process_changed" -> d.withProcess(p.optJSONObject("foreground"))
+            "pwd_changed" -> d.withPwd(p)
+            else -> return
         }
     }
 

@@ -106,7 +106,16 @@ private fun Content(vm: RexViewModel) {
         is Screen.Terminal -> {
             val control = vm.control
             Column(Modifier.fillMaxSize()) {
-                TopBar(title = s.block.label, subtitle = s.block.windowLabel, onBack = vm::back)
+                val block = vm.liveBlock(s.block)
+                val details = vm.blockDetails[block.id]
+                TopBar(
+                    title = block.displayTitle(details),
+                    subtitle = listOfNotNull(block.tabName(), block.displaySubtitle(details).ifEmpty { null })
+                        .joinToString("  ·  "),
+                    onBack = vm::back,
+                ) {
+                    TextButton(onClick = vm::newTab, enabled = !vm.busy && control != null) { Text("+ Tab") }
+                }
                 if (control != null) {
                     // A new connection gets a fresh view and stream, which
                     // re-seeds the screen from the server.
@@ -203,20 +212,45 @@ private fun SessionsScreen(vm: RexViewModel) {
 private fun SessionScreen(vm: RexViewModel) {
     val view = vm.sessionView
     Column(Modifier.fillMaxSize()) {
-        TopBar(title = view?.label ?: "Session", subtitle = "Pick a terminal", onBack = vm::back)
+        TopBar(title = view?.label ?: "Session", subtitle = "Pick a terminal", onBack = vm::back) {
+            TextButton(onClick = vm::newTab, enabled = !vm.busy && view != null) { Text("New tab") }
+        }
         Status(vm)
-        val blocks = view?.blocks.orEmpty()
+        // One group per tab, in Rex.app's tab order. Splits within a tab are
+        // listed one after another; the app opens one terminal at a time.
+        val tabs = view?.blocks.orEmpty().groupBy { it.windowId }
         LazyColumn {
-            items(blocks, key = { it.id }) { b ->
-                val active = b.windowId == view?.activeWindowId && b.focused
-                ListRow(
-                    title = b.label + if (active) "  •" else "",
-                    subtitle = b.windowLabel + if (!b.isTerminal) "  (${b.creator})" else "",
-                    enabled = b.isTerminal,
-                ) { vm.openBlock(b) }
+            tabs.forEach { (windowId, blocks) ->
+                item(key = windowId) {
+                    val active = windowId == view?.activeWindowId
+                    TabHeader(blocks.first().tabName() + if (active) "  •  active" else "")
+                }
+                items(blocks, key = { it.id }) { b ->
+                    val details = vm.blockDetails[b.id]
+                    val focused = b.focused && blocks.size > 1
+                    ListRow(
+                        title = b.displayTitle(details) + if (focused) "  •" else "",
+                        subtitle = b.displaySubtitle(details),
+                        enabled = b.isTerminal,
+                    ) { vm.openBlock(b) }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun TabHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    )
+    HorizontalDivider()
 }
 
 @Composable
@@ -227,8 +261,16 @@ private fun ListRow(title: String, subtitle: String, enabled: Boolean = true, on
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+        Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (subtitle.isNotEmpty()) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
     HorizontalDivider()
 }

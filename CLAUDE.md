@@ -48,8 +48,9 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 | `TerminalView.kt` | Canvas renderer for a `VtTerminal` frame in the bundled JetBrains Mono Nerd Font Mono (`res/font`, Nerd Fonts v3.5.1; licenses in `assets/licenses`); tap shows the keyboard, drag scrolls; custom `InputConnection` + `dispatchKeyEvent` through Ghostty's key encoder; sticky Ctrl |
 | `GhosttyVt.kt` | JNI declarations and `VtTerminal` (thread-safe wrapper: write, resize, colors, scroll, frame, encodeKey) |
 | `cpp/rexvt.c` | JNI shim: terminal create/decode/free, `vt_write`, resize, theme colors, render state → flat int arrays, synchronized-output holds, key encoding |
-| `RexViewModel.kt` | Navigation state (`Screen`), connection lifecycle, auto-reconnect |
-| `MainActivity.kt` | Compose UI: Connect → Sessions → Session (blocks) → Terminal |
+| `RexViewModel.kt` | Navigation state (`Screen`), connection lifecycle, auto-reconnect, `blockDetails` (kept live from `block_event`s), `newTab` |
+| `BlockDetails.kt` | Per-terminal title, foreground process, and cwd, and the display names built from them (`displayTitle`, `tabName`) |
+| `MainActivity.kt` | Compose UI: Connect → Sessions → Session (blocks grouped by tab) → Terminal |
 
 ## Rex protocol essentials
 
@@ -76,6 +77,12 @@ The authoritative reference is served by every Rex server at `GET /llms.txt`. It
   Raw VT output follows, with interleaved `ESC _ rex1;<nonce decimal>;<json> ESC \`
   messages: `resize` (`cols`/`rows`/`cell_width_px`/`cell_height_px`), `theme`, and
   `child_exited`. The first `resize` follows the snapshot immediately.
+- **Block names:** block labels are almost always the flavor's generic `shell`, and window
+  labels default to `Window <last 8 hex of id>`, so neither identifies anything. The app names
+  blocks from `terminal.title`/`process`/`pwd`, kept current by the `title_changed`,
+  `process_changed`, and `pwd_changed` block events (which `session.attach` delivers).
+- **Tabs:** `session.new_window` with `focus: false` adds a tab without switching Rex.app's
+  active tab. The app never creates splits.
 - **Ownership:** the client calls `session.own_block` (take) so `terminal.resize` applies,
   and `session.disown_block` when leaving, so Rex.app can size the block again.
 - **Network access:** remote servers need TCP (Tailscale `https://rex.<tailnet>.ts.net`, or
