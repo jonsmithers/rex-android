@@ -4,13 +4,21 @@ A minimal Android client for [Rex](https://www.superlogical.com/rex/docs/install
 It connects to a Rex server over the network, lists sessions, and opens a terminal block
 as a live, interactive terminal.
 
+| Connect | Sessions | Tabs and terminals | Terminal |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/connect.png" width="200" alt="Connect screen"> | <img src="docs/screenshots/sessions.png" width="200" alt="Session list"> | <img src="docs/screenshots/session.png" width="200" alt="A session's tabs and terminals"> | <img src="docs/screenshots/terminal.png" width="200" alt="vim running in a terminal"> |
+| <img src="docs/screenshots/connect-dark.png" width="200" alt="Connect screen, dark"> | <img src="docs/screenshots/sessions-dark.png" width="200" alt="Session list, dark"> | <img src="docs/screenshots/session-dark.png" width="200" alt="A session's tabs and terminals, dark"> | <img src="docs/screenshots/terminal-dark.png" width="200" alt="vim running in a terminal, dark"> |
+
+The app follows the system's light or dark setting. To retake these after a visual change,
+run `docs/screenshots/capture.sh` (see [its README](docs/screenshots/README.md)).
+
 What it does:
 
 - Connect to a Rex server by address (`host:7297`, `http://…`, `https://rex.<tailnet>.ts.net`).
 - List sessions, create a new shell session, and list a session's terminal blocks, grouped
   by tab. Each block is named by its terminal title (or its own label, if it has one), with
   the running program and directory under it, and both update live.
-- Open a new tab with a shell (**New tab** in the block list, **+ Tab** in a terminal). It
+- Open a new tab with a shell (**New tab** in the block list, or the new-tab icon at the top of a terminal). It
   doesn't become the session's active tab, so Rex.app keeps showing what it was showing.
 - Show a terminal live, with colors and full-screen apps (vim, top, …), and type into it.
   Rendering and key encoding use Ghostty's terminal library (libghostty-vt), so the screen
