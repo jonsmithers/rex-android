@@ -87,3 +87,8 @@ Details that weren't obvious from the docs:
 - Composing keyboards (CJK, swipe) only send text once it's committed.
 - Cleartext HTTP is allowed so the client can reach tailnet or LAN listeners.
 - No SSH transport and no login-server accounts.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The bundled JetBrains Mono Nerd Font is under the SIL Open Font
+License 1.1 (`app/src/main/assets/licenses/jetbrains-mono-nerd-font/`).
