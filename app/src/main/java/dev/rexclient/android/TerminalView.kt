@@ -63,10 +63,12 @@ class TerminalView(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
     private val padPx = (2 * density).roundToInt()
 
-    private val regular = Typeface.MONOSPACE
-    private val bold = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-    private val italic = Typeface.create(Typeface.MONOSPACE, Typeface.ITALIC)
-    private val boldItalic = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD_ITALIC)
+    // JetBrains Mono Nerd Font Mono (res/font): its Nerd Font icons and
+    // Powerline glyphs are sized to one cell, matching Ghostty's width tables.
+    private val regular = resources.getFont(R.font.jetbrains_mono_nf_regular)
+    private val bold = resources.getFont(R.font.jetbrains_mono_nf_bold)
+    private val italic = resources.getFont(R.font.jetbrains_mono_nf_italic)
+    private val boldItalic = resources.getFont(R.font.jetbrains_mono_nf_bold_italic)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = regular
         textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 13f, resources.displayMetrics)

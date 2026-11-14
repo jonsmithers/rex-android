@@ -85,6 +85,5 @@ Details that weren't obvious from the docs:
 - One block at a time. No split layouts, window switching, or floating layers.
 - No mouse reporting, text selection, or copy. In full-screen apps, dragging sends arrow keys.
 - Composing keyboards (CJK, swipe) only send text once it's committed.
-- Uses the system monospace font, so Nerd Font and powerline glyphs show as boxes.
 - Cleartext HTTP is allowed so the client can reach tailnet or LAN listeners.
 - No SSH transport and no login-server accounts.

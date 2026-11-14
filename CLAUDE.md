@@ -45,7 +45,7 @@ export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
 | `RexControl.kt` | `rex.control.v1` client: hello/welcome, request/response by id, events, reconnect token, typed helpers, `SessionView` parsing |
 | `TerminalStream.kt` | `rex.data.terminal.v1`: `data.connect` ticket → `/api/data` → HELLO/WELCOME → bytes. Collects the snapshot (record framing up to FINISH) for `onSnapshot`, strips `rex1` APCs; falls back to `terminal.format` vt seeding if the snapshot won't decode |
 | `TerminalScreen.kt` | `TerminalController` glue: stream → `VtTerminal`, input → serialized `terminal.write`, serialized own/resize, disown; Compose keys bar and status overlay |
-| `TerminalView.kt` | Canvas renderer for a `VtTerminal` frame; tap shows the keyboard, drag scrolls; custom `InputConnection` + `dispatchKeyEvent` through Ghostty's key encoder; sticky Ctrl |
+| `TerminalView.kt` | Canvas renderer for a `VtTerminal` frame in the bundled JetBrains Mono Nerd Font Mono (`res/font`, Nerd Fonts v3.5.1; licenses in `assets/licenses`); tap shows the keyboard, drag scrolls; custom `InputConnection` + `dispatchKeyEvent` through Ghostty's key encoder; sticky Ctrl |
 | `GhosttyVt.kt` | JNI declarations and `VtTerminal` (thread-safe wrapper: write, resize, colors, scroll, frame, encodeKey) |
 | `cpp/rexvt.c` | JNI shim: terminal create/decode/free, `vt_write`, resize, theme colors, render state → flat int arrays, synchronized-output holds, key encoding |
 | `RexViewModel.kt` | Navigation state (`Screen`), connection lifecycle, auto-reconnect |
